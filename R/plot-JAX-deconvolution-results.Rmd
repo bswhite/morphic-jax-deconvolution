@@ -1,0 +1,271 @@
+---
+title: "plot-JAX-deconvolution-results"
+output: html_document
+date: "2025-08-18"
+---
+
+```{r}
+suppressPackageStartupMessages(library(pacman))
+suppressPackageStartupMessages(p_load(ComplexHeatmap))
+suppressPackageStartupMessages(p_load(dplyr))
+suppressPackageStartupMessages(p_load(plyr))
+suppressPackageStartupMessages(p_load(data.table))
+suppressPackageStartupMessages(p_load(tibble))
+# install.packages("openxlsx", dependencies = TRUE)
+suppressPackageStartupMessages(library(openxlsx))
+```
+
+```{r}
+source("morphic-utils.R")
+```
+
+```{r}
+analysis.dir <- "/sdata/activities/white-morphic/users/whitebr/JAX/"
+#plot.dir <- "/home/whitebr/morphic/JAX/EPAS1/"
+plot.dir <- paste0(analysis.dir, "/deconvolution-plots-aug-2025/")
+plot.dir <- paste0(analysis.dir, "/deconvolution-plots-all-bulk/")
+dir.create(plot.dir, showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r}
+csx.sig.matrix.file <- paste0(analysis.dir, "csx-bulk-batches/CIBERSORTx_Job43_Early_Development_Differentiation_Hypoxia_Normoxia_Raw_300_ExM_PrSyn_CTB_inferred_phenoclasses.CIBERSORTx_Job43_Early_Development_Differentiation_Hypoxia_Normoxia_Raw_300_ExM_PrSyn_CTB_inferred_refsample.bm.K999.txt")  
+csx.sig.matrix <- as.data.frame(fread(csx.sig.matrix.file))
+
+markers <- ddply(reshape2:::melt(csx.sig.matrix), .variables = c("NAME"), .fun = function(df) df[which.max(df$value),])
+colnames(markers) <- c("Gene", "CellType", "SignatureExpressionValue")
+markers <- ddply(markers, .variables = c("CellType"), .fun = function(df) data.frame(df, cbind("RankWithinCellType" = rank(-df$SignatureExpressionValue))))
+markers <- markers[order(markers$CellType, markers$SignatureExpressionValue, decreasing=TRUE),]
+file = paste0(analysis.dir, "/csx-bulk-batches/CIBERSORTx_Job43_markers.tsv")
+write.table(markers, file = file, row.names=FALSE, col.names=TRUE, quote=FALSE, sep="\t")
+
+```
+
+
+```{r}
+# Process MorPhiC metadata
+```
+
+
+```{r}
+data.base.dir <- "/sdata/activities/white-morphic/data/jax2/raw/"
+metadata.files <-
+  list("Dec2023" = paste0(data.base.dir, "/Dec2023/metadata/JAX_RNAseq_ExtraEmbryonic_metadata.xlsx"),
+       "May2024" = paste0(data.base.dir, "/May2024/metadata/JAX_RNAseq2_ExtraEmbryonic_metadata.xlsx"),
+       "RNAseq4" = paste0(data.base.dir,  "/June-2024/JAX_RNAseq4_ExEm_brain/metadata/JAX_RNAseq4_ExEm_brain_metadata.xlsx"),
+       "RNAseq_Neuroectoderm" = paste0(data.base.dir,  "/June-2024/JAX_RNAseq_Neuroectoderm/JAX_RNAseq_Neuroectoderm_metadata_corrected.xlsx"),
+       "RNASeq5" = paste0(data.base.dir,  "/September-2024/JAX_RNAseq5_ExE_CBO/metadata/STUDY5_DPC_Metadata_template_v2.xlsx"),
+       "RNASeq6" = paste0(data.base.dir, "/September-2024/JAX_RNAseq6_Diverse/metadata/STUDY6_DPC_Metadata_template_v3.xlsx"),
+       "RNASeq7" = paste0(data.base.dir,  "/September-2024/JAX_RNAseq7_Reversion/metadata/STUDY7_DPC_Metadata_template_v2.xlsx"),
+       "RNASeq8" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq08/metadata/JAX_RNAseq08.xlsx"),
+       "RNASeq9" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq09/metadata/JAX_RNAseq09.xlsx"),
+       "RNASeq10" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq10/metadata/JAX_RNAseq10.xlsx"),
+       "RNASeq11" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq11/metadata/JAX_RNAseq11.xlsx"))
+metadata <-
+  ldply(metadata.files, .fun = function(file) { print(file); return(process.metadata.file(file)) })
+colnames(metadata)[1] <- "dataset"
+metadata$sample <- gsub(metadata$`FILE.NAME.(Required)`, pattern="_R1_001.fastq.gz", replacement="")
+
+```
+
+```{r}
+# Subset to extra-embryonic data
+metadata <- subset(metadata, grepl(model.system, pattern="embryonic", ignore.case=TRUE) | grepl(model.system, pattern="syncytium", ignore.case=TRUE))
+print(unique(metadata$model.system))
+print(unique(metadata$time.point))
+```
+
+```{r}
+process.and.merge.cibersortx.results <- function(csx.result.dir, metadata) {
+  csx.result.files <- list.files(csx.result.dir, pattern="*Adjusted.txt")
+  all.csx.results <-
+    ldply(csx.result.files,
+          .fun = function(file) {
+            tbl <- read.table(paste0(csx.result.dir, file), header=TRUE, sep="\t")
+            # colnames(tbl)[1:6] <- c("Mixture", "TE", "ExM", "Early Progenitor", "PrS", "CTB")
+            tbl
+          })
+  all.csx.results.with.metadata <- merge(all.csx.results, metadata, by.x = c("Mixture"), by.y = c("sample"))
+  stopifnot(all(all.csx.results.with.metadata$Mixture %in% metadata$sample))
+  rownames(all.csx.results.with.metadata) <- unlist(lapply(all.csx.results.with.metadata$Mixture, function(str) unlist(strsplit(str, split="(_)+GT"))[1]))
+  all.csx.results.with.metadata
+}
+```
+
+
+```{r}
+# Load the CIBERSORTx results
+#csx.result.dir <- "/sdata/activities/white-morphic/users/whitebr/JAX/csx-results-aug-2025/"
+csx.result.dirs <- 
+  list("PrSyn-ExMC" = "/sdata/activities/white-morphic/users/whitebr/JAX/csx-results-all-bulk-PrSyn-ExMC-absolute/",
+       "PrSyn-ExMC-CTB" = "/sdata/activities/white-morphic/users/whitebr/JAX/csx-results-all-bulk-PrSyn-ExMC-CTB-absolute/")
+csx.results <- llply(csx.result.dirs, function(dir) process.and.merge.cibersortx.results(dir, metadata))
+```
+
+```{r}
+for(nm in names(csx.results)) {
+  file <- paste0(analysis.dir, "/csx-results-", nm, ".csv")
+  print(file)
+  write.table(csx.results[[nm]], file = file, sep=",", row.names=FALSE, col.names=TRUE)
+}
+```
+
+
+```{r}
+# Low oxygen leads to increased EXM and CTB and decreased PrS relative to WT cells (all at day 6).
+fs = 18
+zscore <- FALSE
+for(nm in names(csx.results)) {
+  df <- csx.results[[nm]]
+  pops <- colnames(df)[2:(which(colnames(df)=="P.value")-1)]
+  tmp.df <- subset(df, condition %in% c("WT") & cell.type == "PrS")
+  tmp.df <- tmp.df[, !(colnames(tmp.df) %in% c("P.value", "Correlation", "RMSE", "Absolute.score..sig.score", "condition", "cell.type", "strategy"))]
+  flag <- tmp.df$oxygen == "Normoxia"
+  tmp.df[flag,"oxygen"] <- "20%"
+  flag <- tmp.df$oxygen == "Hypoxia"
+  tmp.df[flag,"oxygen"] <- "3%"
+  tmp.df <- tmp.df[order(tmp.df$oxygen),]
+  
+  hm <- make.heatmap(tmp.df, 
+                     pops = pops, zscore=zscore, 
+                     column_title = "WT, PrS-differentiated cells\nunder normoxia and hypoxia", 
+                     column_title_gp = gpar(fontsize = fs),
+                     legend.name = paste0("CIBERSORTx\nAbsolute Value", ifelse(zscore, "\n(z score)", "")),
+                     fontsize = fs,
+                     column_names_gp = gpar(fontsize = fs),
+                     row_names_gp = gpar(fontsize = fs),
+                     heatmap_legend_param = list(labels_gp = gpar(fontsize = fs), title_gp = gpar(fontsize=fs)), cluster_columns = FALSE, show_column_names = FALSE)
+  
+  plot.sub.dir <- paste0(plot.dir, "/", nm, "/")
+  dir.create(plot.sub.dir, showWarnings = FALSE, recursive = TRUE)
+  
+  file = paste0(plot.sub.dir, "/jax-wt-prs-normoxia-and-hypoxia-csx-cleaned-no-clustering-all-bulk-samples-", nm, ".png")
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  png(file=file, width = 2 * 480)
+  print(file)
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  dev.off()
+  
+  file = paste0(plot.sub.dir, "/jax-wt-prs-normoxia-and-hypoxia-csx-cleaned-no-clustering-all-bulk-samples-", nm, ".pdf")
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  pdf(file=file, width = 2 * 7)
+  print(file)
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  dev.off()
+  
+  
+  file = paste0(plot.sub.dir, "/jax-wt-prs-normoxia-and-hypoxia-csx-cleaned-all-bulk-samples-", nm, ".csv")
+  write.table(tmp.df, file = file, sep=",", row.names=FALSE, col.names=TRUE)
+}
+```
+
+```{r}
+# EPAS1 mutant in low oxygen leads to increased PrS and decreased EXM and CTB relative to WT in low oxygen. 
+# EPAS1 mutant only has a phenotype in low oxygen.
+fs = 18
+zscore <- FALSE
+for(nm in names(csx.results)) {
+  df <- csx.results[[nm]]
+
+  pops <- colnames(df)[2:(which(colnames(df)=="P.value")-1)]
+  # CSX Result 4. EPAS1 KO alters hypoxic response
+  # From notes, expect EPAS1 KO (presumably under hypoxia) to increase PrS, but decrease ExM and CTB.
+  # We see the former two, but also an increase in CTB.
+  tmp.df <- subset(df, condition %in% c("WT", "EPAS1") & cell.type == "PrS")
+  # Limit to WT and TPC
+  tmp.df <- subset(tmp.df, strategy %in% c("None", "PTC"))
+  tmp.df <- tmp.df[, !(colnames(tmp.df) %in% c("P.value", "Correlation", "RMSE", "Absolute.score..sig.score", "cell.type", "strategy"))]
+  flag <- tmp.df$oxygen == "Normoxia"
+  tmp.df[flag,"oxygen"] <- "20%"
+  flag <- tmp.df$oxygen == "Hypoxia"
+  tmp.df[flag,"oxygen"] <- "3%"
+  tmp.df <- tmp.df[order(tmp.df$oxygen, tmp.df$condition, method="radix", decreasing=c(FALSE,TRUE)),]
+  
+  hm <- make.heatmap(tmp.df, 
+                     pops = pops, zscore=zscore,
+                     column_title = "WT and EPAS1 PTC PrS-differentiated cells\nunder normoxia and hypoxia", 
+                     column_title_gp = gpar(fontsize = fs),
+                     legend.name = paste0("CIBERSORTx\nAbsolute Value", ifelse(zscore, "\n(z score)", "")),
+                     fontsize = fs,
+                     column_names_gp = gpar(fontsize = fs - 4),
+                     row_names_gp = gpar(fontsize = fs),
+                     heatmap_legend_param = list(labels_gp = gpar(fontsize = fs), title_gp = gpar(fontsize=fs)),
+                     cluster_columns = FALSE, show_column_names = FALSE)
+  
+  plot.sub.dir <- paste0(plot.dir, "/", nm, "/")
+  dir.create(plot.sub.dir, showWarnings = FALSE, recursive = TRUE)
+  
+  file = paste0(plot.sub.dir, "/jax-wt-epas-prs-normoxia-and-hypoxia-csx-cleaned-no-clustering-all-bulk-samples-", nm, ".png")
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  png(file=file, width = 2 * 480)
+  print(file)
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  dev.off()
+  
+  file = paste0(plot.sub.dir, "/jax-wt-epas-prs-normoxia-and-hypoxia-csx-cleaned-no-clustering-all-bulk-samples-", nm, ".pdf")
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  pdf(file=file, width = 2 * 7)
+  print(file)
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  dev.off()
+  
+  file = paste0(plot.sub.dir, "/jax-wt-epas-prs-normoxia-and-hypoxia-csx-cleaned-all-bulk-samples-", nm, ".csv")
+  write.table(tmp.df, file = file, sep=",", row.names=FALSE, col.names=TRUE)
+}
+```
+
+```{r}
+# GCM1 KO leads to shift from PrS
+fs = 18
+zscore <- FALSE
+
+for(nm in names(csx.results)) {
+  df <- csx.results[[nm]]
+
+  pops <- colnames(df)[2:(which(colnames(df)=="P.value")-1)]
+  # CSX Result 4. EPAS1 KO alters hypoxic response
+  # From notes, expect EPAS1 KO (presumably under hypoxia) to increase PrS, but decrease ExM and CTB.
+  # We see the former two, but also an increase in CTB.
+  tmp.df <- subset(df, condition %in% c("WT", "GCM1") & oxygen == "Normoxia" & cell.type %in% c("PrS", "ExM"))
+  # Limit to WT and TPC
+  tmp.df <- subset(tmp.df, strategy %in% c("None", "PTC"))
+  tmp.df <- tmp.df[, !(colnames(tmp.df) %in% c("P.value", "Correlation", "RMSE", "Absolute.score..sig.score", "strategy"))]
+  flag <- tmp.df$oxygen == "Normoxia"
+  tmp.df[flag,"oxygen"] <- "20%"
+  flag <- tmp.df$oxygen == "Hypoxia"
+  tmp.df[flag,"oxygen"] <- "3%"
+  tmp.df <- tmp.df[order(tmp.df$oxygen, tmp.df$condition, method="radix", decreasing=c(FALSE,TRUE)),]
+  
+  hm <- make.heatmap(tmp.df, 
+                     pops = pops, zscore=zscore,
+                     column_title = "WT and GCM1 KO PrS-differentiated cells\nunder normoxia", 
+                     column_title_gp = gpar(fontsize = fs),
+                     legend.name = paste0("CIBERSORTx\nAbsolute Value", ifelse(zscore, "\n(z score)", "")),
+                     fontsize = fs,
+                     column_names_gp = gpar(fontsize = fs - 4),
+                     row_names_gp = gpar(fontsize = fs),
+                     heatmap_legend_param = list(labels_gp = gpar(fontsize = fs), title_gp = gpar(fontsize=fs)),
+                     cluster_columns = FALSE, show_column_names = FALSE)
+  
+  plot.sub.dir <- paste0(plot.dir, "/", nm, "/")
+  dir.create(plot.sub.dir, showWarnings = FALSE, recursive = TRUE)
+
+  file = paste0(plot.sub.dir, "/jax-wt-gcm1-prs-normoxia-no-clustering-all-bulk-samples-", nm, ".png")
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  png(file=file, width = 2 * 480)
+  print(file)
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  dev.off()
+  
+  file = paste0(plot.sub.dir, "/jax-wt-gcm1-prs-normoxia-no-clustering-all-bulk-samples-", nm, ".pdf")
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  pdf(file=file, width = 2 * 7)
+  print(file)
+  draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
+  dev.off()
+  
+  file = paste0(plot.sub.dir, "/jax-wt-gcm1-prs-normoxia-csx-cleaned-all-bulk-samples-", nm, ".csv")
+  write.table(tmp.df, file = file, sep=",", row.names=FALSE, col.names=TRUE)
+}
+
+```
+
