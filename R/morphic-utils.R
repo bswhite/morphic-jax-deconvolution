@@ -1,3 +1,109 @@
+# This parses the metadata files as provided by Wei Sun's team like
+# v7_JAX_RNAseq1_Prod.xlsx
+parse.jax.xlsx.metadata.file <- function(xlsx.file) {
+  cell.line.info <- read.xlsx(xlsx.file, sheet="Clonal cell line", startRow = 4)
+  cell.line.info <- cell.line.info[-1,]
+  expression.alt.info <- read.xlsx(xlsx.file, sheet="Expression alteration", startRow=4)
+  expression.alt.info <- expression.alt.info[-1,]
+  diff.product.info <- read.xlsx(xlsx.file, sheet="Differentiated product", startRow=4)
+  diff.product.info <- diff.product.info[-1,]
+  lib.prep.info <- read.xlsx(xlsx.file, sheet="Library preparation", startRow=4)
+  lib.prep.info <- lib.prep.info[-1,]
+  seq.file.info <- read.xlsx(xlsx.file, sheet="Sequence file", startRow=4)
+  seq.file.info <- seq.file.info[-1,]
+  
+  # In the new v7_JAX_RNAseq*_Prod.xlsx files, the Clonal cell line and Expression alteration
+  # tabs are merged with the common column 'expression_alteration.label'
+  # Note that WTs don't have alteration! Hence, we need all.x = TRUE
+  old_nrows <- nrow(cell.line.info)
+  common.col <- intersect(colnames(cell.line.info), colnames(expression.alt.info))
+  stopifnot(length(common.col) == 1)
+  stopifnot(all(expression.alt.info[, common.col] %in% cell.line.info[, common.col]))
+  info <- merge(cell.line.info, expression.alt.info, all.x=TRUE)
+  stopifnot(nrow(info) == old_nrows)
+  
+  # In the new v7_JAX_RNAseq*_Prod.xlsx files, the Clonal cell line and Differentiated product
+  # tabs are merged with the common column 'clonal_cell_line.label'
+  # Note that we might have the same cell line under different conditions (e.g., hypoxia vs normoxia)
+  # As such we may have more entries in diff.product.info
+  common.col <- intersect(colnames(info), colnames(diff.product.info))
+  stopifnot(length(common.col) == 1)
+  stopifnot(all(info[, common.col] %in% diff.product.info[, common.col]))
+  stopifnot(all(diff.product.info[, common.col] %in% info[, common.col]))
+  info <- merge(info, diff.product.info)
+  stopifnot(nrow(info) == nrow(diff.product.info))
+  
+  # In the new v7_JAX_RNAseq*_Prod.xlsx files, the Differentiated product and Library preparation
+  # tabs are merged with the common differentiated_product.label column.
+  old_nrows <- nrow(info)
+  common.col <- intersect(colnames(info), colnames(lib.prep.info))
+  stopifnot(length(common.col) == 1)
+  stopifnot(all(info[, common.col] %in% lib.prep.info[, common.col]))
+  stopifnot(all(lib.prep.info[, common.col] %in% info[, common.col]))
+  info <- merge(info, lib.prep.info)
+  stopifnot(nrow(info) == nrow(lib.prep.info))
+  
+  # In the new v7_JAX_RNAseq*_Prod.xlsx files, the Library preparation and Sequence file
+  # tabs are merged with the common library_preparation.label column.
+  old_nrows <- nrow(info)
+  common.col <- intersect(colnames(info), colnames(seq.file.info))
+  stopifnot(length(common.col) == 1)
+  
+  # For our purposes, only keep 1 of the 2 FASTQ files
+  seq.file.info <- subset(seq.file.info, sequence_file.read_index == "read1")
+  
+  missing <- info[, common.col][!(info[, common.col] %in% seq.file.info[, common.col])]
+  if(length(missing) != 0) {
+    print(missing)
+    stop()
+  }
+  #stopifnot(all(info[, common.col] %in% seq.file.info[, common.col]))
+  missing <- seq.file.info[, common.col][!(seq.file.info[, common.col] %in% info[, common.col])]
+  if(length(missing) != 0) {
+    print(missing)
+    stop()
+  }
+  #stopifnot(all(seq.file.info[, common.col] %in% info[, common.col]))
+  metadata <- merge(info, seq.file.info)
+  stopifnot(nrow(metadata) == nrow(seq.file.info))
+  
+  metadata$sample <- gsub(metadata$sequence_file.label, pattern="_R1_001.fastq.gz", replacement="")
+  metadata[,"model.system"] <- metadata$differentiated_product.model_system
+  metadata[,"cell.type"] <- metadata$differentiated_product.model_system
+  flag <- grepl(metadata[,"cell.type"], pattern="primitive syn", ignore.case=TRUE)
+  metadata[flag, "cell.type"] <- "PrS"
+  flag <- grepl(metadata[,"cell.type"], pattern="embryonic mesench", ignore.case=TRUE)
+  metadata[flag, "cell.type"] <- "ExM"
+  
+  metadata[,"time.point"] <- metadata$differentiated_product.timepoint_value
+  metadata[,"condition"] <- metadata$differentiated_product.wt_control_status
+  #flag <- !is.na(metadata$expression_alteration.genes.altered_gene_symbol)
+  # GRHL1 is sometimes mispelled as GHRL1
+  flag <- !is.na(metadata$expression_alteration.genes.altered_gene_symbol) & ( metadata$expression_alteration.genes.altered_gene_symbol == "GHRL1" )
+  metadata[flag,"expression_alteration.genes.altered_gene_symbol"] <- "GRHL1"
+  flag <- metadata$condition == "KO"
+  metadata[flag,"condition"] <- metadata[flag,"expression_alteration.genes.altered_gene_symbol"]
+  metadata[,"strategy"] <- metadata$expression_alteration.genes.editing_strategy
+  metadata[is.na(metadata$strategy),"strategy"] <- metadata[is.na(metadata$strategy),"differentiated_product.wt_control_status"]
+  metadata[metadata$strategy == "Not applicable","strategy"] <- metadata[metadata$strategy == "Not applicable","differentiated_product.wt_control_status"]
+  trans <- list("reversion of termination codon" = "REV PTC", "full coding length" = "Gene", "critical exon" = "CE", "termination codon" = "PTC", "WT" = "None")
+  for(nm in names(trans)) {
+    flag <- grepl(metadata$strategy, pattern=nm, ignore.case=TRUE)
+    metadata[flag,"strategy"] <- trans[[nm]]
+  }
+  metadata[,"oxygen"] <- metadata$differentiated_product.treatment_condition
+  trans <- list("hypoxia" = "Hypoxia", "normoxia" = "Normoxia", "Not applicable" = "Normoxia")
+  for(nm in names(trans)) {
+    flag <- grepl(metadata$oxygen, pattern=nm, ignore.case=TRUE)
+    metadata[flag,"oxygen"] <- trans[[nm]]
+  }
+  
+  metadata
+}
+
+# This accounts for the irregularities in the original metadata files like
+# JAX_RNAseq_ExtraEmbryonic_metadata.xlsx
+# metadata/JAX_RNAseq08.xlsx
 process.metadata.file <- function(metadata.file) {
   sheet.names <- getSheetNames(metadata.file)
   seq.metadata <- read.xlsx(metadata.file, sheet = "Sequence file")
@@ -93,9 +199,10 @@ process.metadata.file <- function(metadata.file) {
   tbl
 }
 
-make.heatmap <- function(tbl, pops = NULL, zscore = FALSE, legend.name = "Deconvolved\nCell Type\nPercentage", fontsize = 12, ...) {
-  p_load(rcartocolor)
+make.heatmap <- function(tbl, pops = NULL, zscore = FALSE, legend.name = "Deconvolved\nCell Type\nPercentage", fontsize = 12, plot.batch = TRUE, plot.cell.line = TRUE, ...) {
+  suppressPackageStartupMessages(p_load(rcartocolor))
   suppressPackageStartupMessages(p_load(plyr))
+  suppressPackageStartupMessages(p_load(Polychrome)) # for Glasbey / colors
   cols <- c("Prim", "EXM", "Early Progenitor", "TE", "ExM", "PrS", "CTB", "Pluripotency", "Peri-TB", "PrSyn", "ExMC", "Cycling-Cell")
   if(!is.null(pops)) {
     cols <- pops
@@ -106,12 +213,21 @@ make.heatmap <- function(tbl, pops = NULL, zscore = FALSE, legend.name = "Deconv
   print(rowSums(mat))
   # Schematic representation of cell types derived from trophectoderm (TE): extra-embryonic mesenchyme (ExM), cytotrophoblast (CTB) and primitive syncytium (PrS). 
   
-  p_load(rcartocolor)
   genes <- sort(unique(tbl$condition))
   strategies <- sort(unique(tbl$strategy))
   if("None" %in% strategies) strategies <- c(strategies[strategies != "None"], "None")
   oxygens <- sort(unique(tbl$oxygen))
   lineages <- sort(unique(tbl$cell.type))
+  batches <- c()
+  cell.lines <- c()
+  batch.column <- "sequence_file.run_id"
+  cell.line.column <- "clonal_cell_line.parental_cell_line_name"
+  if(plot.cell.line & (cell.line.column %in% colnames(tbl))) {
+    cell.lines <- sort(unique(tbl[,cell.line.column]))
+  }
+  if(plot.batch & (batch.column %in% colnames(tbl))) {
+    batches <- sort(unique(tbl[,batch.column]))
+  }
   
   vals <- list()
   #vals[["Gene"]] = genes
@@ -122,9 +238,15 @@ make.heatmap <- function(tbl, pops = NULL, zscore = FALSE, legend.name = "Deconv
   if (length(strategies) > 1) vals[["Strategy"]] = strategies
   if (length(oxygens) > 1) vals[["Oxygen"]] = oxygens
   if (length(lineages) > 1) vals[["Lineage"]] = lineages
+  if (length(cell.lines) > 1) vals[["Cell Line"]] = cell.lines
+  if (length(batches) > 1) vals[["Batch"]] = batches
+  print(vals)
   cols <- llply(vals, 
                 .fun = function(vec) {
-                  if(length(vec) > 2) {
+                  if(length(vec) > 12) {
+                    pal = glasbey.colors(length(vec))
+                    names(pal) = vec
+                  } else if(length(vec) > 2) {
                     pal = carto_pal(length(vec), "Safe")
                     names(pal) = vec
                   } else {
@@ -164,8 +286,8 @@ make.heatmap <- function(tbl, pops = NULL, zscore = FALSE, legend.name = "Deconv
   for(nm in names(vals)) {
     annotation_legend_param[[nm]] = list(title_gp = gpar(fontsize = fontsize), labels_gp = gpar(fontsize = fontsize))
   }
-  old.col.names <- c("condition", "strategy", "oxygen", "cell.type")
-  new.col.names <- c("Gene", "Strategy", "Oxygen", "Lineage")
+  old.col.names <- c("condition", "strategy", "oxygen", "cell.type", batch.column, cell.line.column)
+  new.col.names <- c("Gene", "Strategy", "Oxygen", "Lineage", "Batch", "Cell Line")
   flag <- new.col.names %in% names(vals)
   
   meta.df <- tbl[, old.col.names[flag], drop=FALSE]

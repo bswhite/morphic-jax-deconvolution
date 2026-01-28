@@ -20,22 +20,44 @@ source("morphic-utils.R")
 ```
 
 ```{r}
-analysis.dir <- "/sdata/activities/white-morphic/users/whitebr/JAX/"
+#analysis.dir <- "/sdata/activities/white-morphic/users/whitebr/JAX/"
 #plot.dir <- "/home/whitebr/morphic/JAX/EPAS1/"
-plot.dir <- paste0(analysis.dir, "/deconvolution-plots-aug-2025/")
-plot.dir <- paste0(analysis.dir, "/deconvolution-plots-all-bulk/")
+analysis.dir <- "../results/"
+resource.dir <- "../resources/"
+#plot.dir <- paste0(analysis.dir, "/plots/deconvolution-plots-aug-2025/")
+#plot.dir <- paste0(analysis.dir, "/plots/deconvolution-plots-all-bulk/")
+plot.dir <- paste0(analysis.dir, "/plots/deconvolution-plots-new-annos/")
 dir.create(plot.dir, showWarnings = FALSE, recursive = TRUE)
 ```
 
 ```{r}
-csx.sig.matrix.file <- paste0(analysis.dir, "csx-bulk-batches/CIBERSORTx_Job43_Early_Development_Differentiation_Hypoxia_Normoxia_Raw_300_ExM_PrSyn_CTB_inferred_phenoclasses.CIBERSORTx_Job43_Early_Development_Differentiation_Hypoxia_Normoxia_Raw_300_ExM_PrSyn_CTB_inferred_refsample.bm.K999.txt")  
+# Read in the CIBERSORTx signature matrix (created by Create Signature Matrix online or the docker equivalent)
+
+# Signature matrix from "old annotations" with all 3 populations -- ExM, PrSyn, and CTB
+# csx.sig.matrix.file <- paste0(resource.dir, "/CIBERSORTx_Job43_Early_Development_Differentiation_Hypoxia_Normoxia_Raw_300_ExM_PrSyn_CTB_inferred_phenoclasses.CIBERSORTx_Job43_Early_Development_Differentiation_Hypoxia_Normoxia_Raw_300_ExM_PrSyn_CTB_inferred_refsample.bm.K999.txt")  
+# prefix <- "old-annos-ExM-PrSyn-CTB"
+
+# Signature matrix with "new annotations" with all 2 populations -- ExM and PrSyn
+# csx.sig.matrix.file <- paste0(resource.dir, "/CIBERSORTx_Job126_ED_new_anno_Hyp_Norm_Raw_300_ExM_PrSyn_inferred_phenoclasses.CIBERSORTx_Job126_ED_new_anno_Hyp_Norm_Raw_300_ExM_PrSyn_inferred_refsample.bm.K999.txt")
+# prefix <- "new-annos-ExM-PrSyn"
+
+
+# Signature matrix with "new annotations" with all 3 populations -- ExM, PrSyn, and CTB
+csx.sig.matrix.file <- paste0(resource.dir, "/CIBERSORTx_Job104_ED_new_anno_Hyp_Normo_Raw_300_ExM_PrSyn_CTB_inferred_phenoclasses.CIBERSORTx_Job104_ED_new_anno_Hyp_Normo_Raw_300_ExM_PrSyn_CTB_inferred_refsample.bm.K999.txt")
+prefix <- "new-annos-ExM-PrSyn-CTB"
+
 csx.sig.matrix <- as.data.frame(fread(csx.sig.matrix.file))
 
-markers <- ddply(reshape2:::melt(csx.sig.matrix), .variables = c("NAME"), .fun = function(df) df[which.max(df$value),])
+markers <- 
+  ddply(reshape2:::melt(csx.sig.matrix), .variables = c("NAME"), 
+        .fun = function(df) df[which.max(df$value),])
 colnames(markers) <- c("Gene", "CellType", "SignatureExpressionValue")
-markers <- ddply(markers, .variables = c("CellType"), .fun = function(df) data.frame(df, cbind("RankWithinCellType" = rank(-df$SignatureExpressionValue))))
+
+markers <- 
+  ddply(markers, .variables = c("CellType"), 
+        .fun = function(df) data.frame(df, cbind("RankWithinCellType" = rank(-df$SignatureExpressionValue))))
 markers <- markers[order(markers$CellType, markers$SignatureExpressionValue, decreasing=TRUE),]
-file = paste0(analysis.dir, "/csx-bulk-batches/CIBERSORTx_Job43_markers.tsv")
+file <- paste0(analysis.dir, "/", prefix, "-markers.tsv")
 write.table(markers, file = file, row.names=FALSE, col.names=TRUE, quote=FALSE, sep="\t")
 
 ```
@@ -45,34 +67,124 @@ write.table(markers, file = file, row.names=FALSE, col.names=TRUE, quote=FALSE, 
 # Process MorPhiC metadata
 ```
 
+```{r}
+base_dir <- '/sdata/activities/white-morphic/data/jax2/raw/'
+data_files <- c(paste0(base_dir, 'Dec2023/processed/release110-gencode44/Tables/genesCounts.csv'),
+                paste0(base_dir, 'June-2024/JAX_RNAseq4_ExEm_brain/processed/release110-gencode44/Tables/genesCounts.csv'),
+                paste0(base_dir, 'June-2024/JAX_RNAseq_Neuroectoderm/processed/release110-gencode44/Tables/genesCounts.csv'),
+                paste0(base_dir, 'May2024/processed/release110-gencode44/Tables/genesCounts.csv'),
+                paste0(base_dir, 'September-2024/JAX_RNAseq5_ExE_CBO/processed/release110-gencode44/Tables/genesCounts.csv'),
+                paste0(base_dir, 'September-2024/JAX_RNAseq6_Diverse/processed/release110-gencode44/Tables/genesCounts.csv'),
+                paste0(base_dir, 'September-2024/JAX_RNAseq7_Reversion/processed/release110-gencode44/Tables/genesCounts.csv'),
+                paste0(base_dir, 'MorPhiC_Release_June_2025/JAX_RNAseq08/processed/Tables/genesCounts.csv'),
+                paste0(base_dir, 'MorPhiC_Release_June_2025/JAX_RNAseq09/processed/Tables/genesCounts.csv'),
+                paste0(base_dir, 'MorPhiC_Release_June_2025/JAX_RNAseq10/processed/Tables/genesCounts.csv'),
+                paste0(base_dir, 'MorPhiC_Release_June_2025/JAX_RNAseq11/processed/Tables/genesCounts.csv'))
+names(data_files) <- data_files
+sample.files <- 
+  ldply(data_files,
+        .fun = function(data.file) {
+          df <- as.data.frame(fread(data.file))
+          samples <- colnames(df)
+          samples <- samples[samples != "Name"]
+          data.frame(sample = samples)
+        })
+colnames(sample.files)[1] <- "data.file"
+```
+
 
 ```{r}
-data.base.dir <- "/sdata/activities/white-morphic/data/jax2/raw/"
-metadata.files <-
-  list("Dec2023" = paste0(data.base.dir, "/Dec2023/metadata/JAX_RNAseq_ExtraEmbryonic_metadata.xlsx"),
-       "May2024" = paste0(data.base.dir, "/May2024/metadata/JAX_RNAseq2_ExtraEmbryonic_metadata.xlsx"),
-       "RNAseq4" = paste0(data.base.dir,  "/June-2024/JAX_RNAseq4_ExEm_brain/metadata/JAX_RNAseq4_ExEm_brain_metadata.xlsx"),
-       "RNAseq_Neuroectoderm" = paste0(data.base.dir,  "/June-2024/JAX_RNAseq_Neuroectoderm/JAX_RNAseq_Neuroectoderm_metadata_corrected.xlsx"),
-       "RNASeq5" = paste0(data.base.dir,  "/September-2024/JAX_RNAseq5_ExE_CBO/metadata/STUDY5_DPC_Metadata_template_v2.xlsx"),
-       "RNASeq6" = paste0(data.base.dir, "/September-2024/JAX_RNAseq6_Diverse/metadata/STUDY6_DPC_Metadata_template_v3.xlsx"),
-       "RNASeq7" = paste0(data.base.dir,  "/September-2024/JAX_RNAseq7_Reversion/metadata/STUDY7_DPC_Metadata_template_v2.xlsx"),
-       "RNASeq8" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq08/metadata/JAX_RNAseq08.xlsx"),
-       "RNASeq9" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq09/metadata/JAX_RNAseq09.xlsx"),
-       "RNASeq10" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq10/metadata/JAX_RNAseq10.xlsx"),
-       "RNASeq11" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq11/metadata/JAX_RNAseq11.xlsx"))
+if(FALSE) {
+  # This uses the old metadata files
+  data.base.dir <- "/sdata/activities/white-morphic/data/jax2/raw/"
+  metadata.files <-
+    list("Dec2023" = paste0(data.base.dir, "/Dec2023/metadata/JAX_RNAseq_ExtraEmbryonic_metadata.xlsx"),
+         "May2024" = paste0(data.base.dir, "/May2024/metadata/JAX_RNAseq2_ExtraEmbryonic_metadata.xlsx"),
+         "RNAseq4" = paste0(data.base.dir,  "/June-2024/JAX_RNAseq4_ExEm_brain/metadata/JAX_RNAseq4_ExEm_brain_metadata.xlsx"),
+         "RNAseq_Neuroectoderm" = paste0(data.base.dir,  "/June-2024/JAX_RNAseq_Neuroectoderm/JAX_RNAseq_Neuroectoderm_metadata_corrected.xlsx"),
+         "RNASeq5" = paste0(data.base.dir,  "/September-2024/JAX_RNAseq5_ExE_CBO/metadata/STUDY5_DPC_Metadata_template_v2.xlsx"),
+         "RNASeq6" = paste0(data.base.dir, "/September-2024/JAX_RNAseq6_Diverse/metadata/STUDY6_DPC_Metadata_template_v3.xlsx"),
+         "RNASeq7" = paste0(data.base.dir,  "/September-2024/JAX_RNAseq7_Reversion/metadata/STUDY7_DPC_Metadata_template_v2.xlsx"),
+         "RNASeq8" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq08/metadata/JAX_RNAseq08.xlsx"),
+         "RNASeq9" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq09/metadata/JAX_RNAseq09.xlsx"),
+         "RNASeq10" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq10/metadata/JAX_RNAseq10.xlsx"),
+         "RNASeq11" = paste0(data.base.dir,  "/MorPhiC_Release_June_2025/JAX_RNAseq11/metadata/JAX_RNAseq11.xlsx"))
+  metadata <-
+    ldply(metadata.files, .fun = function(file) { print(file); df <- process.metadata.file(file); df[,"metadata.file"] <- file; return(df) })
+  colnames(metadata)[1] <- "dataset"
+  metadata$sample <- gsub(metadata$`FILE.NAME.(Required)`, pattern="_R1_001.fastq.gz", replacement="")
+}
+
+# The following uses the metadata files provided by Wei's team
+fhcc_github_metadata_dir <- "/sdata/activities/white-morphic/users/whitebr/resources/MorPhiC_bulk_RNAseq/data/metadata_spreadsheets/"
+new_metadata_files <- c(
+  paste0(fhcc_github_metadata_dir, 'v7_JAX_RNAseq1_Prod.xlsx'),
+  paste0(fhcc_github_metadata_dir, 'v7_JAX_RNAseq2_Prod.xlsx'),
+  paste0(fhcc_github_metadata_dir, 'v7_JAX_RNAseq3_Prod.xlsx'),
+  paste0(fhcc_github_metadata_dir, 'v7_JAX_RNAseq4_Prod.xlsx'),
+  paste0(fhcc_github_metadata_dir, 'v7_JAX_RNAseq5_Prod.xlsx'),
+  paste0(fhcc_github_metadata_dir, 'v7_JAX_RNAseq6_Prod.xlsx'),
+  paste0(fhcc_github_metadata_dir, 'v7_JAX_RNAseq7_Prod.xlsx'),
+  paste0(fhcc_github_metadata_dir, 'JAX_RNAseq08.xlsx'),
+  paste0(fhcc_github_metadata_dir, 'JAX_RNAseq09.xlsx'),
+  paste0(fhcc_github_metadata_dir, 'JAX_RNAseq10.xlsx'),
+  paste0(fhcc_github_metadata_dir, 'JAX_RNAseq11.xlsx')
+)
 metadata <-
-  ldply(metadata.files, .fun = function(file) { print(file); return(process.metadata.file(file)) })
-colnames(metadata)[1] <- "dataset"
-metadata$sample <- gsub(metadata$`FILE.NAME.(Required)`, pattern="_R1_001.fastq.gz", replacement="")
+    ldply(new_metadata_files, .fun = function(file) { print(file); df <- parse.jax.xlsx.metadata.file(file); df[, "metadata.file"] <- file; return(df); })
+metadata$sample <- gsub(metadata$sequence_file.label, pattern="_R1_001.fastq.gz", replacement="")
+metadata[,"model.system"] <- metadata$differentiated_product.model_system
+metadata[,"cell.type"] <- metadata$differentiated_product.model_system
+flag <- grepl(metadata[,"cell.type"], pattern="primitive syn", ignore.case=TRUE)
+metadata[flag, "cell.type"] <- "PrS"
+flag <- grepl(metadata[,"cell.type"], pattern="embryonic mesench", ignore.case=TRUE)
+metadata[flag, "cell.type"] <- "ExM"
 
+metadata[,"time.point"] <- metadata$differentiated_product.timepoint_value
+metadata[,"condition"] <- metadata$differentiated_product.wt_control_status
+#flag <- !is.na(metadata$expression_alteration.genes.altered_gene_symbol)
+# GRHL1 is sometimes mispelled as GHRL1
+flag <- !is.na(metadata$expression_alteration.genes.altered_gene_symbol) & ( metadata$expression_alteration.genes.altered_gene_symbol == "GHRL1" )
+metadata[flag,"expression_alteration.genes.altered_gene_symbol"] <- "GRHL1"
+flag <- metadata$condition == "KO"
+metadata[flag,"condition"] <- metadata[flag,"expression_alteration.genes.altered_gene_symbol"]
+metadata[,"strategy"] <- metadata$expression_alteration.genes.editing_strategy
+metadata[is.na(metadata$strategy),"strategy"] <- metadata[is.na(metadata$strategy),"differentiated_product.wt_control_status"]
+metadata[metadata$strategy == "Not applicable","strategy"] <- metadata[metadata$strategy == "Not applicable","differentiated_product.wt_control_status"]
+trans <- list("reversion of termination codon" = "REV PTC", "full coding length" = "Gene", "critical exon" = "CE", "termination codon" = "PTC", "WT" = "None")
+for(nm in names(trans)) {
+  flag <- grepl(metadata$strategy, pattern=nm, ignore.case=TRUE)
+  metadata[flag,"strategy"] <- trans[[nm]]
+}
+metadata[,"oxygen"] <- metadata$differentiated_product.treatment_condition
+trans <- list("hypoxia" = "Hypoxia", "normoxia" = "Normoxia", "Not applicable" = "Normoxia")
+for(nm in names(trans)) {
+  flag <- grepl(metadata$oxygen, pattern=nm, ignore.case=TRUE)
+  metadata[flag,"oxygen"] <- trans[[nm]]
+}
 ```
 
 ```{r}
-# Subset to extra-embryonic data
-metadata <- subset(metadata, grepl(model.system, pattern="embryonic", ignore.case=TRUE) | grepl(model.system, pattern="syncytium", ignore.case=TRUE))
-print(unique(metadata$model.system))
-print(unique(metadata$time.point))
+# Note that GRHL1 is sometimes mispelled as GHRL1
+cat("Data files with GRHL1:\n")
+print(unique(subset(sample.files, grepl(sample, pattern="GRHL1"))$data.file))
+cat("Data files with GHRL1:\n")
+print(unique(subset(sample.files, grepl(sample, pattern="GHRL1"))$data.file))
+
+cat("Data files with GRHL1:\n")
+print(unique(subset(metadata, grepl(sample, pattern="GRHL1"))$metadata.file))
+cat("Data files with GHRL1:\n")
+print(unique(subset(metadata, grepl(sample, pattern="GHRL1"))$metadata.file))
+
 ```
+
+
+```{r}
+# Ensure metadata and data are matched
+stopifnot(all(sample.files$sample %in% metadata$sample))
+stopifnot(all(metadata$sample %in% sample.files$sample))
+```
+
 
 ```{r}
 process.and.merge.cibersortx.results <- function(csx.result.dir, metadata) {
@@ -85,7 +197,18 @@ process.and.merge.cibersortx.results <- function(csx.result.dir, metadata) {
             tbl
           })
   all.csx.results.with.metadata <- merge(all.csx.results, metadata, by.x = c("Mixture"), by.y = c("sample"))
+  missing <- all.csx.results.with.metadata$Mixture[!(all.csx.results.with.metadata$Mixture %in% metadata$sample)]
+  if(length(missing) > 0) {
+    print(missing)
+  }
   stopifnot(all(all.csx.results.with.metadata$Mixture %in% metadata$sample))
+  # We sometimes are missing CIBERSORTx results because of one-sample batches or other failures
+  missing <- metadata[!(metadata$sample %in% all.csx.results.with.metadata$Mixture),]
+  if(nrow(missing) > 0) {
+    print(missing$sample)
+    print(missing$metadata.file)
+  }
+  # stopifnot(all(metadata$sample %in% all.csx.results.with.metadata$Mixture))
   rownames(all.csx.results.with.metadata) <- unlist(lapply(all.csx.results.with.metadata$Mixture, function(str) unlist(strsplit(str, split="(_)+GT"))[1]))
   all.csx.results.with.metadata
 }
@@ -93,13 +216,51 @@ process.and.merge.cibersortx.results <- function(csx.result.dir, metadata) {
 
 
 ```{r}
+# Subset to extra-embryonic data
+metadata <- subset(metadata, grepl(model.system, pattern="embryonic", ignore.case=TRUE) | grepl(model.system, pattern="syncytium", ignore.case=TRUE))
+print(unique(metadata$model.system))
+print(unique(metadata$time.point))
+```
+
+```{r}
+# Should we limit to KOLF2.2J
+unique(metadata$clonal_cell_line.parental_cell_line_name)
+```
+
+
+```{r}
 # Load the CIBERSORTx results
 #csx.result.dir <- "/sdata/activities/white-morphic/users/whitebr/JAX/csx-results-aug-2025/"
 csx.result.dirs <- 
-  list("PrSyn-ExMC" = "/sdata/activities/white-morphic/users/whitebr/JAX/csx-results-all-bulk-PrSyn-ExMC-absolute/",
-       "PrSyn-ExMC-CTB" = "/sdata/activities/white-morphic/users/whitebr/JAX/csx-results-all-bulk-PrSyn-ExMC-CTB-absolute/")
-csx.results <- llply(csx.result.dirs, function(dir) process.and.merge.cibersortx.results(dir, metadata))
+  list("PrSyn-ExMC" = "../results/csx-results-all-bulk-PrSyn-ExMC-absolute/",
+       "PrSyn-ExMC-CTB" = "../results/csx-results-all-bulk-PrSyn-ExMC-CTB-absolute")
+csx.result.dirs <- 
+  list("new-annos-PrSyn-ExMC" = "../results/csx-results-new-annos-PrSyn-ExMC-absolute/",
+       "new-annos-PrSyn-ExMC-CTB" = "../results/csx-results-new-annos-PrSyn-ExMC-CTB-absolute/")
+
+csx.results <- list()
+# Note that 
+# "GCM1_W2_PTC_D06_GT24-01222_TCTCTACT-GAACCGCG_S13_L002"        "NR2F2_PTC_E02_GT25-01221_TGGATCGA-TATCGCAC_S141_L002" 
+# were one-sample batches and so not included in our CIBERSORTx results
+# Also CIBERSORTx_Job135 failed (note there is a Results.txt but not an Adjusted.txt file) for PrSyn-ExMc (2 pops)
+# which led to failures of the following, but I re-ran successfully in Job 147
+# [1] "PITX1_PTC_A01_GT23-14983_CTACGACA-TTGGACTC_S34_L001"          "PITX1_PTC_B03_GT23-14984_TAAGTGGT-GGCTTAAG_S42_L001"         
+# [3] "PITX1_PTC_C03_GT23-14985_CGGACAAC-AATCCGGA_S38_L001"          "LMO2_PTC_A06_GT23-14986_ATATGGAT-TAATACAG_S39_L001"          
+# [5] "LMO2_PTC_F07_GT23-14987_GCGCAAGC-CGGCGTGA_S37_L001"           "LMO2_PTC_F08_GT23-14988_AAGATACT-ATGTAAGT_S40_L001"          
+# [7] "ZBTB7C_PTC_A09_GT23-14989_GGAGCGTC-GCACGGAC_S43_L001"         "ZBTB7C_PTC_A11_GT23-14990_ATGGCATG-GGTACCTT_S35_L001"        
+# [9] "ZBTB7C_PTC_B10_GT23-14991_GCAATGCA-AACGTTCC_S44_L001"         "WT_PITX1_LMO2_ZBTB7C_1_GT23-14992_GTTCCAAT-GCAGAATT_S41_L001"
+# [11] "WT_PITX1_LMO2_ZBTB7C_2_GT23-14993_ACCTTGGC-ATGAGGCC_S36_L001" "WT_PITX1_LMO2_ZBTB7C_3_GT23-14994_ATATCTCG-ACTAAGAT_S45_L001"
+
+# Job 121 failed for the 3 pops, but I re-ran successfully in Job 146
+for(nm in names(csx.result.dirs)) {
+  print(nm)
+  print(list.files(csx.result.dirs[[nm]]))
+  csx.results[[nm]] <- process.and.merge.cibersortx.results(csx.result.dirs[[nm]], metadata)
+  cat("\n")
+}
 ```
+
+
 
 ```{r}
 for(nm in names(csx.results)) {
@@ -109,11 +270,35 @@ for(nm in names(csx.results)) {
 }
 ```
 
+```{r}
+# Compare old and new results
+old.csx.result.files <-
+  list("PrSyn-ExMC" = "../results/csx-results-PrSyn-ExMC.csv",
+       "PrSyn-ExMC-CTB" = "../results/csx-results-PrSyn-ExMC-CTB.csv")
+old.csx.results <- llply(old.csx.result.files, .fun = function(file) read.table(file, sep=",", header=TRUE))
+
+m <- merge(old.csx.results[[1]], csx.results[[1]], by = "Mixture")
+for(col in c("EXM", "Prim")) {
+  plot(m[, paste0(col, ".x")], m[, paste0(col, ".y")], main = col)
+}
+
+m <- merge(old.csx.results[[2]], csx.results[[2]], by = "Mixture")
+for(col in c("EXM", "Prim", "CTB")) {
+  plot(m[, paste0(col, ".x")], m[, paste0(col, ".y")], main = col)
+}
+
+```
+
 
 ```{r}
+source("morphic-utils.R")
+
 # Low oxygen leads to increased EXM and CTB and decreased PrS relative to WT cells (all at day 6).
 fs = 18
 zscore <- FALSE
+# sequence_file.run_id
+# clonal_cell_line.parental_cell_line_name
+# differentiated_product.description
 for(nm in names(csx.results)) {
   df <- csx.results[[nm]]
   pops <- colnames(df)[2:(which(colnames(df)=="P.value")-1)]
@@ -157,6 +342,13 @@ for(nm in names(csx.results)) {
   write.table(tmp.df, file = file, sep=",", row.names=FALSE, col.names=TRUE)
 }
 ```
+
+```{r}
+tbl <- read.table(paste0(plot.dir, "/new-annos-PrSyn-ExMC-CTB/jax-wt-prs-normoxia-and-hypoxia-csx-cleaned-all-bulk-samples-new-annos-PrSyn-ExMC-CTB.csv"), header=TRUE, sep=",")
+
+subset(tbl, oxygen == "3%")$differentiated_product.description
+```
+
 
 ```{r}
 # EPAS1 mutant in low oxygen leads to increased PrS and decreased EXM and CTB relative to WT in low oxygen. 
