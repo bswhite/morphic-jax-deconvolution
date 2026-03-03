@@ -13,6 +13,8 @@ suppressPackageStartupMessages(p_load(data.table))
 suppressPackageStartupMessages(p_load(tibble))
 # install.packages("openxlsx", dependencies = TRUE)
 suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(ggpubr))
+suppressPackageStartupMessages(library(cowplot))
 ```
 
 ```{r}
@@ -290,6 +292,7 @@ for(col in c("EXM", "Prim", "CTB")) {
 ```
 
 
+
 ```{r}
 source("morphic-utils.R")
 
@@ -302,44 +305,135 @@ zscore <- FALSE
 for(nm in names(csx.results)) {
   df <- csx.results[[nm]]
   pops <- colnames(df)[2:(which(colnames(df)=="P.value")-1)]
-  tmp.df <- subset(df, condition %in% c("WT") & cell.type == "PrS")
-  tmp.df <- tmp.df[, !(colnames(tmp.df) %in% c("P.value", "Correlation", "RMSE", "Absolute.score..sig.score", "condition", "cell.type", "strategy"))]
+  
+  # NB: To include the same WT samples as below (for EPAS1 KO), here we first include EPAS1 KOs.
+  # Later, we remove
+  tmp.df <- subset(df, condition %in% c("WT", "EPAS1") & cell.type == "PrS")
+  
+  limit.to.ptc <- FALSE
+  cols.to.exclude <- c("P.value", "Correlation", "RMSE", "Absolute.score..sig.score", "cell.type")
+  column_title <- "WT, PrS-differentiated cells\nunder normoxia and hypoxia"
+  prefix <- "jax-wt-prs-normoxia-and-hypoxia-csx-cleaned-no-clustering-"
+
+  # Limit to KOLF2.2J
+  limit.to.kolf <- TRUE
+  if(limit.to.kolf) {
+    tmp.df <- subset(tmp.df, clonal_cell_line.parental_cell_line_name %in% c("KOLF2.2J"))
+    prefix <- paste0(prefix, "kolf-")
+  } else {
+    prefix <- paste0(prefix, "all-cell-lines-")
+  }
+  
+  # Limit to batches with EPAS1 Normoxia or Hypoxia (to limit batch effects)
+  limit.batch.effects <- TRUE
+  if(limit.batch.effects) {
+    batches <- subset(tmp.df, (condition %in% c("EPAS1", "WT")) & (cell.type == "PrS"))$sequence_file.run_id
+    tmp.df <- subset(tmp.df, sequence_file.run_id %in% batches)
+    prefix <- paste0(prefix, "subset-bulk-samples-")
+  } else {
+    prefix <- paste0(prefix, "all-bulk-samples-")
+  }
+  
+  tmp.df <- tmp.df[, !(colnames(tmp.df) %in% cols.to.exclude)]
+  
+  csx.text <- "Absolute Value"
+  do.normalize <- TRUE
+  if(do.normalize) {
+    sums <- apply(tmp.df[, pops], 1, sum)
+    for(pop in pops) tmp.df[, pop] <- tmp.df[,pop] / sums
+    csx.text <- "Relative\nProportion"
+    prefix <- paste0(prefix, "normalized-")
+  } else {
+    prefix <- paste0(prefix, "raw-")
+  }
   flag <- tmp.df$oxygen == "Normoxia"
   tmp.df[flag,"oxygen"] <- "20%"
   flag <- tmp.df$oxygen == "Hypoxia"
   tmp.df[flag,"oxygen"] <- "3%"
-  tmp.df <- tmp.df[order(tmp.df$oxygen),]
+
+  # Finally, limit to WT
+  tmp.df <- subset(tmp.df, condition == "WT")
+    
+  tmp.df <- tmp.df[order(tmp.df$oxygen, tmp.df$condition, tmp.df$sequence_file.run_id, method="radix", decreasing=c(FALSE,TRUE, TRUE)),]
+  tmp.df[,"compound.condition"] <- paste0(tmp.df$condition, " ", tmp.df$oxygen)
+  lvls <- unique(as.character(tmp.df[,"compound.condition"]))
+  base.lvl <- "WT 20%"
+  tmp.df[,"compound.condition"] <- factor(tmp.df[,"compound.condition"], levels = c(base.lvl, lvls[lvls != base.lvl]))
   
   hm <- make.heatmap(tmp.df, 
-                     pops = pops, zscore=zscore, 
-                     column_title = "WT, PrS-differentiated cells\nunder normoxia and hypoxia", 
+                     pops = pops, zscore=zscore,
+                     column_title = column_title, 
                      column_title_gp = gpar(fontsize = fs),
-                     legend.name = paste0("CIBERSORTx\nAbsolute Value", ifelse(zscore, "\n(z score)", "")),
+                     legend.name = paste0("CIBERSORTx\n", csx.text, ifelse(zscore, "\n(z score)\n", "\n")),
                      fontsize = fs,
-                     column_names_gp = gpar(fontsize = fs),
+                     column_names_gp = gpar(fontsize = fs - 4),
                      row_names_gp = gpar(fontsize = fs),
-                     heatmap_legend_param = list(labels_gp = gpar(fontsize = fs), title_gp = gpar(fontsize=fs)), cluster_columns = FALSE, show_column_names = FALSE)
+                     heatmap_legend_param = list(labels_gp = gpar(fontsize = fs), title_gp = gpar(fontsize=fs)),
+                     cluster_columns = FALSE, show_column_names = FALSE,
+                     plot.batch = FALSE)
   
   plot.sub.dir <- paste0(plot.dir, "/", nm, "/")
   dir.create(plot.sub.dir, showWarnings = FALSE, recursive = TRUE)
   
-  file = paste0(plot.sub.dir, "/jax-wt-prs-normoxia-and-hypoxia-csx-cleaned-no-clustering-all-bulk-samples-", nm, ".png")
+  file = paste0(plot.sub.dir, "/", prefix, nm, ".png")
   draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
   png(file=file, width = 2 * 480)
   print(file)
   draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
   dev.off()
   
-  file = paste0(plot.sub.dir, "/jax-wt-prs-normoxia-and-hypoxia-csx-cleaned-no-clustering-all-bulk-samples-", nm, ".pdf")
+  file = paste0(plot.sub.dir, "/", prefix, nm, ".pdf")
   draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
   pdf(file=file, width = 2 * 7)
   print(file)
   draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
   dev.off()
   
+  gs <- llply(pops, 
+            .fun = function(cell.type) {
+              form <- as.formula(paste0(cell.type, " ~ compound.condition"))
+              stat.test <- as.data.frame(coefficients(summary(lm(formula = form, data = tmp.df))))
+              stat.test[,".y"] <- cell.type
+              stat.test[,"group1"] <- base.lvl
+              stat.test[,"group2"] <- rownames(stat.test)
+              stat.test <- subset(stat.test, !grepl(group2, pattern="Intercept"))
+              stat.test$group2 <- gsub(stat.test$group2, pattern="compound.condition", replacement="")
+              stat.test[,"p"] <- format(stat.test[,"Pr(>|t|)"], digits=3)
+              
+              stat.test <- 
+                merge(stat.test, 
+                      get_y_position(tmp.df, formula = form, ref.group=base.lvl))
+              g <- ggboxplot(tmp.df, x = "compound.condition", y = cell.type,
+                             color = "compound.condition", 
+                             add = "jitter")
+              g <- g + stat_pvalue_manual(stat.test, label = "p", tip.length = 0.01)
+              g <- g + xlab("") + ylab(paste0(cell.type, "\nCIBERSORTx Relative Proportion"))
+              g <- g + theme(legend.position="right", text = element_text(size=20))
+              g <- g + labs(colour = "") + ylim(c(0,1))
+              g <- g + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+          })
+
+  g.leg <- get_legend(gs[[1]])
+  for(i in 1:length(gs)) gs[[i]] <- gs[[i]] + theme(legend.position='none')
+  gs[[length(gs)+1]] <- plot_grid(g.leg)
+  g.tot <- plot_grid(plotlist=gs, ncol=length(gs), rel_widths = c(rep(1, length(gs)-1),0.5))
   
-  file = paste0(plot.sub.dir, "/jax-wt-prs-normoxia-and-hypoxia-csx-cleaned-all-bulk-samples-", nm, ".csv")
+  file = paste0(plot.sub.dir, "/", prefix, nm, "-boxplot.png")
+  png(file=file, width = 2 * 480)
+  print(file)
+  print(g.tot)
+  dev.off()
+  
+  file = paste0(plot.sub.dir, "/", prefix, nm, "-boxplot.pdf")
+  pdf(file=file, width = 2 * 7)
+  print(file)
+  print(g.tot)
+  dev.off()
+    
+  file = paste0(plot.sub.dir, "/", prefix, nm, ".csv")
   write.table(tmp.df, file = file, sep=",", row.names=FALSE, col.names=TRUE)
+
+  
 }
 ```
 
@@ -355,6 +449,7 @@ subset(tbl, oxygen == "3%")$differentiated_product.description
 # EPAS1 mutant only has a phenotype in low oxygen.
 fs = 18
 zscore <- FALSE
+source("morphic-utils.R")
 for(nm in names(csx.results)) {
   df <- csx.results[[nm]]
 
@@ -363,47 +458,176 @@ for(nm in names(csx.results)) {
   # From notes, expect EPAS1 KO (presumably under hypoxia) to increase PrS, but decrease ExM and CTB.
   # We see the former two, but also an increase in CTB.
   tmp.df <- subset(df, condition %in% c("WT", "EPAS1") & cell.type == "PrS")
-  # Limit to WT and TPC
-  tmp.df <- subset(tmp.df, strategy %in% c("None", "PTC"))
-  tmp.df <- tmp.df[, !(colnames(tmp.df) %in% c("P.value", "Correlation", "RMSE", "Absolute.score..sig.score", "cell.type", "strategy"))]
+  
+  limit.to.ptc <- FALSE
+  cols.to.exclude <- c("P.value", "Correlation", "RMSE", "Absolute.score..sig.score", "cell.type")
+  column_title <- "WT and EPAS1 PrS-differentiated cells\nunder normoxia and hypoxia"
+  prefix <- "jax-wt-epas-prs-normoxia-and-hypoxia-csx-cleaned-no-clustering-"
+  if(limit.to.ptc) {
+    # Limit to WT and PTC
+    tmp.df <- subset(tmp.df, strategy %in% c("None", "PTC"))
+    cols.to.exclude <- c(cols.to.exclude, "strategy")
+    prefix <- paste0(prefix, "ptc-only-")
+    column_title <- "WT and EPAS1 PTC PrS-differentiated cells\nunder normoxia and hypoxia"
+  } else {
+    prefix <- paste0(prefix, "all-ko-")
+  }
+  
+  # Limit to KOLF2.2J
+  limit.to.kolf <- TRUE
+  if(limit.to.kolf) {
+    tmp.df <- subset(tmp.df, clonal_cell_line.parental_cell_line_name %in% c("KOLF2.2J"))
+    prefix <- paste0(prefix, "kolf-")
+  } else {
+    prefix <- paste0(prefix, "all-cell-lines-")
+  }
+  
+  # Limit to batches with EPAS1 Normoxia or Hypoxia (to limit batch effects)
+  limit.batch.effects <- TRUE
+  if(limit.batch.effects) {
+    batches <- subset(tmp.df, (condition %in% c("EPAS1", "WT")) & (cell.type == "PrS"))$sequence_file.run_id
+    tmp.df <- subset(tmp.df, sequence_file.run_id %in% batches)
+    prefix <- paste0(prefix, "subset-bulk-samples-")
+  } else {
+    prefix <- paste0(prefix, "all-bulk-samples-")
+  }
+  
+  tmp.df <- tmp.df[, !(colnames(tmp.df) %in% cols.to.exclude)]
+  
+  csx.text <- "Absolute Value"
+  do.normalize <- TRUE
+  if(do.normalize) {
+    sums <- apply(tmp.df[, pops], 1, sum)
+    for(pop in pops) tmp.df[, pop] <- tmp.df[,pop] / sums
+    csx.text <- "Relative\nProportion"
+    prefix <- paste0(prefix, "normalized-")
+  } else {
+    prefix <- paste0(prefix, "raw-")
+  }
   flag <- tmp.df$oxygen == "Normoxia"
   tmp.df[flag,"oxygen"] <- "20%"
   flag <- tmp.df$oxygen == "Hypoxia"
   tmp.df[flag,"oxygen"] <- "3%"
-  tmp.df <- tmp.df[order(tmp.df$oxygen, tmp.df$condition, method="radix", decreasing=c(FALSE,TRUE)),]
+  
+  tmp.df <- tmp.df[order(tmp.df$oxygen, tmp.df$condition, tmp.df$sequence_file.run_id, method="radix", decreasing=c(FALSE,TRUE, TRUE)),]
+  tmp.df[,"compound.condition"] <- paste0(tmp.df$condition, " ", tmp.df$oxygen)
+  lvls <- unique(as.character(tmp.df[,"compound.condition"]))
+  base.lvl <- "WT 20%"
+  tmp.df[,"compound.condition"] <- factor(tmp.df[,"compound.condition"], levels = c(base.lvl, lvls[lvls != base.lvl]))
   
   hm <- make.heatmap(tmp.df, 
                      pops = pops, zscore=zscore,
-                     column_title = "WT and EPAS1 PTC PrS-differentiated cells\nunder normoxia and hypoxia", 
+                     column_title = column_title, 
                      column_title_gp = gpar(fontsize = fs),
-                     legend.name = paste0("CIBERSORTx\nAbsolute Value", ifelse(zscore, "\n(z score)", "")),
+                     legend.name = paste0("CIBERSORTx\n", csx.text, ifelse(zscore, "\n(z score)\n", "\n")),
                      fontsize = fs,
                      column_names_gp = gpar(fontsize = fs - 4),
                      row_names_gp = gpar(fontsize = fs),
                      heatmap_legend_param = list(labels_gp = gpar(fontsize = fs), title_gp = gpar(fontsize=fs)),
-                     cluster_columns = FALSE, show_column_names = FALSE)
+                     cluster_columns = FALSE, show_column_names = FALSE,
+                     plot.batch = FALSE)
   
   plot.sub.dir <- paste0(plot.dir, "/", nm, "/")
   dir.create(plot.sub.dir, showWarnings = FALSE, recursive = TRUE)
   
-  file = paste0(plot.sub.dir, "/jax-wt-epas-prs-normoxia-and-hypoxia-csx-cleaned-no-clustering-all-bulk-samples-", nm, ".png")
+  file = paste0(plot.sub.dir, "/", prefix, nm, ".png")
   draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
   png(file=file, width = 2 * 480)
   print(file)
   draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
   dev.off()
   
-  file = paste0(plot.sub.dir, "/jax-wt-epas-prs-normoxia-and-hypoxia-csx-cleaned-no-clustering-all-bulk-samples-", nm, ".pdf")
+  file = paste0(plot.sub.dir, "/", prefix, nm, ".pdf")
   draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
   pdf(file=file, width = 2 * 7)
   print(file)
   draw(hm, padding = unit(c(2, 35, 2, 2), "mm")) 
   dev.off()
   
-  file = paste0(plot.sub.dir, "/jax-wt-epas-prs-normoxia-and-hypoxia-csx-cleaned-all-bulk-samples-", nm, ".csv")
+  gs <- llply(pops, 
+            .fun = function(cell.type) {
+              form <- as.formula(paste0(cell.type, " ~ compound.condition"))
+              stat.test <- as.data.frame(coefficients(summary(lm(formula = form, data = tmp.df))))
+              stat.test[,".y"] <- cell.type
+              stat.test[,"group1"] <- base.lvl
+              stat.test[,"group2"] <- rownames(stat.test)
+              stat.test <- subset(stat.test, !grepl(group2, pattern="Intercept"))
+              stat.test$group2 <- gsub(stat.test$group2, pattern="compound.condition", replacement="")
+              stat.test[,"p"] <- format(stat.test[,"Pr(>|t|)"], digits=3)
+              
+              stat.test <- 
+                merge(stat.test, 
+                      get_y_position(tmp.df, formula = form, ref.group=base.lvl))
+              g <- ggboxplot(tmp.df, x = "compound.condition", y = cell.type,
+                             color = "compound.condition", 
+                             add = "jitter")
+              g <- g + stat_pvalue_manual(stat.test, label = "p", tip.length = 0.01)
+              g <- g + xlab("") + ylab(paste0(cell.type, "\nCIBERSORTx Relative Proportion"))
+              g <- g + theme(legend.position="right", text = element_text(size=20))
+              g <- g + labs(colour = "") + ylim(c(0,1))
+              g <- g + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+          })
+
+  g.leg <- get_legend(gs[[1]])
+  for(i in 1:length(gs)) gs[[i]] <- gs[[i]] + theme(legend.position='none')
+  gs[[length(gs)+1]] <- plot_grid(g.leg)
+  g.tot <- plot_grid(plotlist=gs, ncol=length(gs), rel_widths = c(rep(1, length(gs)-1),0.5))
+  
+  file = paste0(plot.sub.dir, "/", prefix, nm, "-boxplot.png")
+  png(file=file, width = 2 * 480)
+  print(file)
+  print(g.tot)
+  dev.off()
+  
+  file = paste0(plot.sub.dir, "/", prefix, nm, "-boxplot.pdf")
+  pdf(file=file, width = 2 * 7)
+  print(file)
+  print(g.tot)
+  dev.off()
+    
+  file = paste0(plot.sub.dir, "/", prefix, nm, ".csv")
   write.table(tmp.df, file = file, sep=",", row.names=FALSE, col.names=TRUE)
 }
 ```
+
+```{r}
+nm <- names(csx.results)[2]
+sb <- subset(tmp.df, condition == "WT" & oxygen == "20%")
+library(ggplot2)
+g <- ggplot(data = sb, aes(x = sequence_file.run_id, y = Prim))
+g <- g + geom_point()
+g <- g + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gs <- llply(pops, 
+            .fun = function(cell.type) {
+#cell.type <- "Prim"
+
+form <- as.formula(paste0(cell.type, " ~ compound.condition"))
+stat.test <- as.data.frame(coefficients(summary(lm(formula = form, data = tmp.df))))
+stat.test[,".y"] <- cell.type
+stat.test[,"group1"] <- base.lvl
+stat.test[,"group2"] <- rownames(stat.test)
+stat.test <- subset(stat.test, !grepl(group2, pattern="Intercept"))
+stat.test$group2 <- gsub(stat.test$group2, pattern="compound.condition", replacement="")
+stat.test[,"p"] <- format(stat.test[,"Pr(>|t|)"], digits=3)
+
+stat.test <- 
+  merge(stat.test, 
+        get_y_position(tmp.df, formula = form, ref.group=base.lvl))
+g <- ggboxplot(tmp.df, x = "compound.condition", y = cell.type,
+                color = "compound.condition", 
+                add = "jitter")
+g <- g + stat_pvalue_manual(stat.test, label = "p", tip.length = 0.01)
+g <- g + xlab("") + ylab(paste0(cell.type, "\nCIBERSORTx Relative Proportion"))
+g <- g + theme(legend.position="right", text = element_text(size=10)) + labs(colour = "") + ylim(c(0,1))
+})
+
+g.leg <- get_legend(gs[[1]])
+for(i in 1:length(gs)) gs[[i]] <- gs[[i]] + theme(legend.position='none')
+gs[[length(gs)+1]] <- plot_grid(g.leg)
+g.tot <- plot_grid(plotlist=gs, ncol=length(gs), rel_widths = c(rep(1, length(gs)-1),0.5))
+```
+
 
 ```{r}
 # GCM1 KO leads to shift from PrS

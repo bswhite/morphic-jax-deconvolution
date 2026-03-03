@@ -74,6 +74,10 @@ parse.jax.xlsx.metadata.file <- function(xlsx.file) {
   metadata[flag, "cell.type"] <- "PrS"
   flag <- grepl(metadata[,"cell.type"], pattern="embryonic mesench", ignore.case=TRUE)
   metadata[flag, "cell.type"] <- "ExM"
+  flag <- grepl(metadata[,"cell.type"], pattern="cortical brain", ignore.case=TRUE)
+  metadata[flag, "cell.type"] <- "CBO"
+  flag <- grepl(metadata[,"cell.type"], pattern="fibroblast", ignore.case=TRUE)
+  metadata[flag, "cell.type"] <- "fibroblast"
   
   metadata[,"time.point"] <- metadata$differentiated_product.timepoint_value
   metadata[,"condition"] <- metadata$differentiated_product.wt_control_status
@@ -214,8 +218,9 @@ make.heatmap <- function(tbl, pops = NULL, zscore = FALSE, legend.name = "Deconv
   # Schematic representation of cell types derived from trophectoderm (TE): extra-embryonic mesenchyme (ExM), cytotrophoblast (CTB) and primitive syncytium (PrS). 
   
   genes <- sort(unique(tbl$condition))
+  if("WT" %in% genes) genes <- c("WT", genes[genes != "WT"])
   strategies <- sort(unique(tbl$strategy))
-  if("None" %in% strategies) strategies <- c(strategies[strategies != "None"], "None")
+  if("None" %in% strategies) strategies <- c("None", strategies[strategies != "None"])
   oxygens <- sort(unique(tbl$oxygen))
   lineages <- sort(unique(tbl$cell.type))
   batches <- c()
@@ -284,7 +289,8 @@ make.heatmap <- function(tbl, pops = NULL, zscore = FALSE, legend.name = "Deconv
   
   annotation_legend_param = list()
   for(nm in names(vals)) {
-    annotation_legend_param[[nm]] = list(title_gp = gpar(fontsize = fontsize), labels_gp = gpar(fontsize = fontsize))
+    print(vals[[nm]])
+    annotation_legend_param[[nm]] = list(title_gp = gpar(fontsize = fontsize), at = vals[[nm]], labels_gp = gpar(fontsize = fontsize))
   }
   old.col.names <- c("condition", "strategy", "oxygen", "cell.type", batch.column, cell.line.column)
   new.col.names <- c("Gene", "Strategy", "Oxygen", "Lineage", "Batch", "Cell Line")
